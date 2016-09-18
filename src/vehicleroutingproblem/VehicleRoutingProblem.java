@@ -25,9 +25,6 @@ class Point{
     }
 }
 
-
-
-
 /**
  *
  * @author Cesar Bonilla
@@ -43,19 +40,9 @@ public class VehicleRoutingProblem {
         loadFile();
         //Generate the Cost Matrix
         costMatrix = calculateCostMatrix();
+        printCostMatrix();
         
-        StringBuilder sb = new StringBuilder();
-        for (double[] costMatrix1 : costMatrix) {
-            sb.append("[");
-            for (int i = 0; i < costMatrix1.length; i++) {
-                    sb.append(String.valueOf(costMatrix1[i]));
-                    if(i < costMatrix1.length -1)
-                        sb.append(",");
-            }
-            sb.append("]");
-            sb.append(System.lineSeparator());
-        }
-        System.out.println(sb.toString());
+        
     }
     
     public static void loadFile() throws Exception {
@@ -81,7 +68,6 @@ public class VehicleRoutingProblem {
         }
         
         String [] fileLines = sb.toString().split(System.lineSeparator());
-        System.out.println("FOUND " + fileLines.length + " lines in File");
         
         if(fileLines.length < 3){
             throw new Exception("Input file has not enough lines");
@@ -132,10 +118,23 @@ public class VehicleRoutingProblem {
     
     private static double calculateDistance(Point p1, Point p2) {
         double distance = 0.0;
-        System.out.println(p1.toString());
-        System.out.println(p2.toString());
         distance = Math.sqrt(Math.pow(p1.x-p2.x, 2) + Math.pow(p1.y - p2.y, 2));
         return distance;
+    }
+    
+    private static void printCostMatrix(){
+    StringBuilder sb = new StringBuilder();
+        for (double[] costMatrix1 : costMatrix) {
+            sb.append("[");
+            for (int i = 0; i < costMatrix1.length; i++) {
+                    sb.append(String.valueOf(costMatrix1[i]));
+                    if(i < costMatrix1.length -1)
+                        sb.append(",");
+            }
+            sb.append("]");
+            sb.append(System.lineSeparator());
+        }
+        System.out.println(sb.toString());
     }
 
 }
