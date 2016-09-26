@@ -11,9 +11,11 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import Models.*;
+import java.io.PrintWriter;
+import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 
 /**
  *
@@ -21,22 +23,53 @@ import java.util.Collections;
  */
 public class VehicleRoutingProblem {
 
-    public static int CAR_LIMIT = 0;
+    public static double CAR_LIMIT = 0;
     public static int FLEET_SIZE = 0;
     public static double[][] COST_MATRIX;
-    public static Node[] NODES;
-    public static ArrayList<Route> routes;
-    public static Node DEPOSIT_NODE;
-    //private static Point[] V;
+    private static double[][] savings;
+    public static Nodo[] NODES;
+    public static ArrayList<Ruta> routes;
+    public static Nodo DEPOSIT_NODE;
+    public static int maxIterations = 50;
 
     public static void main(String[] args) throws Exception {
+        Date start_date =  new Date();
         //Load # of Trucks, Deposit and Clients
         loadFile();
+
         //Generate the Cost Matrix
         COST_MATRIX = calculateCostMatrix();
-        //Solve with Sweep Algorithm
-        String result = SolveVRPbySweep();
-        System.out.println(result);
+
+        //Calculate a initial limit for the vehicles
+        calculteInitialLimit();
+
+        //Run algorithm once
+        solveVRP();
+
+        int counter = 0;
+        //Iterate car limit until optimal limit found
+        do {
+            System.out.println("Iteracion: " + counter);
+            if (routes.size() < FLEET_SIZE) {
+                CAR_LIMIT--;
+            } else if (routes.size() > FLEET_SIZE) {
+                CAR_LIMIT++;
+            } else {
+                break;
+            }
+            solveVRP();
+            counter++;
+        } while (counter < maxIterations);
+
+        //Generate files
+        writeFiles();
+
+        printRoutesTotalCost(routes);
+        Date end_date = new Date();
+        
+        long total_time = end_date.getTime() - start_date.getTime();
+        total_time = total_time / 1000;
+        System.out.println("Total Time: " + total_time + " seconds");
 
     }
 
@@ -71,7 +104,7 @@ public class VehicleRoutingProblem {
         FLEET_SIZE = Integer.valueOf(fileLines[0].isEmpty() ? "0" : fileLines[0]);
 
         //Will now initialize the nodes
-        NODES = new Node[fileLines.length - 1];
+        NODES = new Nodo[fileLines.length - 1];
         for (int i = 1; i < fileLines.length; i++) {
 
             String[] currentLine = fileLines[i].split(",");
@@ -79,28 +112,19 @@ public class VehicleRoutingProblem {
             int posY = Integer.valueOf(currentLine[1]);
 
             if (i == 1) {
-                DEPOSIT_NODE = new Node(0);
-                DEPOSIT_NODE.x = posX;
-                DEPOSIT_NODE.y = posY;
-                DEPOSIT_NODE.amount = 0;
-                DEPOSIT_NODE.add = "DEPO";
+                DEPOSIT_NODE = new Nodo(0,posX,posY,"0");
+                DEPOSIT_NODE.distanciaAlDeposito = 0;
                 NODES[0] = DEPOSIT_NODE;
 
             } else {
-                int nodeIndex = i -1;
-                NODES[nodeIndex] = new Node(nodeIndex);
-                NODES[nodeIndex].x = posX;
-                NODES[nodeIndex].y = posY;
-                NODES[nodeIndex].amount = 1;
-                NODES[nodeIndex].add = "N" + (nodeIndex);
+                int nodeIndex = i - 1;
+                String nombre = String.valueOf(nodeIndex);
+                NODES[nodeIndex] = new Nodo(nodeIndex,posX,posY,nombre);
+                NODES[nodeIndex].distanciaAlDeposito = calculateDistance(NODES[nodeIndex], DEPOSIT_NODE);
 
             }
 
         }
-
-        CAR_LIMIT = (NODES.length / FLEET_SIZE) + 1;
-
-        System.out.println("File succesfully loaded");
 
     }
 
@@ -123,14 +147,142 @@ public class VehicleRoutingProblem {
         return localCostMatrix;
     }
 
-    private static double calculateDistance(Node n1, Node n2) {
-        double distance;
-        double x1 = n1.x;
-        double x2 = n2.x;
-        double y1 = n1.y;
-        double y2 = n2.y;
-        distance = Math.sqrt(Math.pow(x1 - x2, 2) + Math.pow(y1 - y2, 2));
-        return distance;
+    public  static void solveVRP() {
+        routes = new ArrayList<Ruta>();
+
+        for (int i = 0; i < NODES.length; i++) {
+
+            Nodo n = NODES[i];
+
+            //PARA TODOS LOS NODOS MENOS EL DEPOSITO
+            if (i != 0) {
+                //creating the two edges
+                Arista e = new Arista(DEPOSIT_NODE, n, COST_MATRIX[0][n.indice]);
+                Arista e2 = new Arista(n, DEPOSIT_NODE, COST_MATRIX[0][n.indice]);
+
+                Ruta localRoute = new Ruta(NODES.length);
+                localRoute.permitido = CAR_LIMIT;
+                localRoute.add(e);
+                localRoute.add(e2);
+                localRoute.actual += n.distanciaAlDeposito;
+
+                routes.add(localRoute);
+            }
+        }
+
+        //CALCULAS LOS AHORROS DE LAS RUTAS
+        ArrayList<Ahorro> listaAhorros = computeSaving(COST_MATRIX, NODES.length, savings, NODES);
+        //ORDENAMOS LOS AHORROS
+        Collections.sort(listaAhorros);
+
+        //BUSCAMOS AHORROS ENTRE LAS RUTAS ACTUALES
+        while (!listaAhorros.isEmpty()) {
+            Ahorro ahorroActual = listaAhorros.get(0);
+
+            Nodo n1 = ahorroActual.desde;
+            Nodo n2 = ahorroActual.hasta;
+
+            Ruta r1 = n1.routa;
+            Ruta r2 = n2.routa;
+
+            int from = n1.indice;
+            int to = n2.indice;
+
+            //Verificamos que las distancias no sean mayores a la permitida
+            if (ahorroActual.val > 0 && r1.actual + r2.actual < r1.permitido && !r1.equals(r2)) {
+
+                Arista outgoingR2 = r2.aristasSalida[to];
+                Arista incommingR1 = r1.aristasEntrada[from];
+
+                if (outgoingR2 != null && incommingR1 != null) {
+                    boolean succ = r1.merge(r2, new Arista(n1, n2, COST_MATRIX[n1.indice][n2.indice]));
+                    if (succ) {
+                        routes.remove(r2);
+                    }
+                } else {
+                    System.out.println("Problem");
+                }
+
+            }
+
+            listaAhorros.remove(0);
+        }
+    }
+
+    public static ArrayList<Ahorro> computeSaving(double[][] dist, int n, double[][] sav, Nodo[] nodes) {
+        sav = new double[n][n];
+        ArrayList<Ahorro> sList = new ArrayList<Ahorro>();
+        for (int i = 1; i < n; i++) {
+            for (int j = i + 1; j < n; j++) {
+                sav[i][j] = dist[0][i] + dist[j][0] - dist[i][j];
+                Nodo n1 = nodes[i];
+                Nodo n2 = nodes[j];
+                Ahorro s = new Ahorro(sav[i][j], n1, n2);
+                sList.add(s);
+            }
+        }
+        return sList;
+    }
+
+    public static void printSaving(Ahorro s) {
+        int from = s.desde.indice;
+        int to = s.hasta.indice;
+        System.out.println("Saving - From: " + from + " To: " + to + " Val: " + s.val);
+    }
+
+    public static void printRoute(Ruta r) {
+        System.out.print("Route: ");
+        Arista edge = r.aristasSalida[0];
+
+        System.out.print("(" + edge.n1.indice + "->");
+
+        do {
+            edge = r.aristasSalida[edge.n2.indice];
+            System.out.print(edge.n1.indice + "->");
+        } while (edge.n2.indice != 0);
+
+        System.out.print(edge.n2.indice + ")");
+        System.out.println("");
+    }
+    
+        public static void printRoute(Ruta r, PrintWriter pw) {
+        Arista edge = r.aristasSalida[0];
+        
+        StringBuilder sb = new StringBuilder();
+        int numberOfNodes = r.edges.size() - 1;
+        
+        sb.append(String.valueOf(numberOfNodes));
+        sb.append(System.lineSeparator());
+        
+        do {
+            edge = r.aristasSalida[edge.n2.indice];
+            sb.append(edge.n1.indice);
+            sb.append(System.lineSeparator());
+        } while (edge.n2.indice != 0);
+        pw.write(sb.toString());
+        
+        
+    }
+
+    public static void printRoutesTotalCost(ArrayList<Ruta> routes) {
+        int counter = 1;
+        for (Ruta r : routes) {
+            printRoute(r);
+            System.out.println("Route " + (counter++) + ": " + r.costoTotal);
+        }
+    }
+
+    public static void printRoutesTotalCost(ArrayList<Ruta> routes, PrintWriter pw) {
+        int counter = 1;
+        for (Ruta r : routes) {
+            //printRoute(r);
+            StringBuilder sb = new StringBuilder();
+            sb.append("Route ");
+            sb.append(String.valueOf(counter++));
+            sb.append(": ").append(r.costoTotal);
+            sb.append(System.lineSeparator());
+            pw.write(sb.toString());
+        }
     }
 
     private static void printCostMatrix() {
@@ -149,120 +301,50 @@ public class VehicleRoutingProblem {
         System.out.println(sb.toString());
     }
 
-    public static int compClusterCost(Cluster cl, double distances[][]) {
-        int cost = 0;
-        for (int i = 0; i < cl.tsp.size() - 1; i++) {
-            Node n = cl.tsp.get(i);
-            Node n1 = cl.tsp.get(i + 1);
-
-            cost += distances[n.index][n1.index];
-        }
-        return cost;
+    private static double calculateDistance(Nodo n1, Nodo n2) {
+        double distance;
+        double x1 = n1.x;
+        double x2 = n2.x;
+        double y1 = n1.y;
+        double y2 = n2.y;
+        distance = Math.sqrt(Math.pow(x1 - x2, 2) + Math.pow(y1 - y2, 2));
+        return distance;
     }
 
-    public static String SolveVRPbySweep() {
-        ArrayList<Node> nodesList = cluster();
-        Collections.sort(nodesList);
-
-        //Cluster
-        Cluster actualCluster = new Cluster();
-
-        ArrayList<Cluster> clusters = new ArrayList<>();
-
-        //Add the deposit to the actual Cluster
-        actualCluster.add(NODES[0]);
-        for (int i = 0; i < nodesList.size(); i++) {
-            Node n = nodesList.get(i);
-
-            //If the demand is greater than the capacity, then create a new cluster
-            if (actualCluster.amount + n.amount > CAR_LIMIT) {
-                clusters.add(actualCluster);
-                actualCluster = new Cluster();
-                //Add the Depot node to the new Cluster
-                actualCluster.add(NODES[0]);
+    public static void calculteInitialLimit() {
+        
+        double routesLength = 0.0;
+        if (CAR_LIMIT == 0) {
+            Nodo n0 = NODES[0];
+            for (int i = 1; i < NODES.length; i++) {
+                routesLength += calculateDistance(n0, NODES[i]);
             }
-
-            //pridam uzel do clusteru
-            //pridam vsechny hrany ktere inciduji s uzly ktere jiz jsou v clusteru
-            actualCluster.add(n);
-            for (int j = 0; j < actualCluster.nodes.size(); j++) {
-                Node nIn = actualCluster.nodes.get(j);
-                Edge e = new Edge(nIn, n, (int) COST_MATRIX[nIn.index][n.index]);
-
-                Edge eReverse = new Edge(n, nIn, (int) COST_MATRIX[n.index][nIn.index]);
-
-                actualCluster.edges.add(e);
-                actualCluster.edges.add(eReverse);
-            }
-
-            //v pripade posledni polozky musim pridat i cluster.
-            if (i == nodesList.size() - 1) {
-                clusters.add(actualCluster);
-            }
+            CAR_LIMIT = routesLength / FLEET_SIZE;
         }
-
-        int totalCost = 0;
-        int clusterCount = clusters.size();
-
-        StringBuilder sb = new StringBuilder();
-        sb.append(clusterCount).append("\r\n");
-
-        for (int i = 0; i < clusterCount; i++) {
-            clusters.get(i).mst();
-            clusters.get(i).dfsONMST();
-            clusters.get(i).printTSP(sb);
-            sb.append("");
-            sb.append("\r\n");
-            totalCost += compClusterCost(clusters.get(i), COST_MATRIX);
-        }
-
-        for (int i = 0; i < clusterCount; i++) {
-            clusters.get(i).printTSPAdds(sb);
-            sb.append("\r\n");
-        }
-        sb.append("TOTAL COST OF THE ROUTES:").append(totalCost);
-        return sb.toString();
     }
 
-    public static ArrayList<Node> cluster() {
-        Node depo = NODES[0];
-        ArrayList<Node> nodesList = new ArrayList<Node>();
-
-        for (int i = 1; i < NODES.length; i++) {
-            Node n = NODES[i];
-            if (n.x >= depo.x) {
-                if (n.y >= depo.y) {
-                    n.cluster = 1;
-                } else {
-                    n.cluster = 4;
-                }
-            } else if (n.y >= depo.y) {
-                n.cluster = 2;
-            } else {
-                n.cluster = 3;
+    public static void writeFiles() {
+        PrintWriter writer = null;
+        try {
+            String folder = System.getProperty("user.dir") + "\\Data\\";
+            writer = new PrintWriter(folder + "calculos.txt", "UTF-8");
+            printRoutesTotalCost(routes, writer);
+            writer.close();
+            writer = new PrintWriter(folder + "salidas.txt", "UTF-8");
+            for (Ruta route : routes) {
+                printRoute(route,writer);
+            }
+        } catch (FileNotFoundException ex) {
+            Logger.getLogger(VehicleRoutingProblem.class.getName()).log(Level.SEVERE, null, ex);
+        } catch (UnsupportedEncodingException ex) {
+            Logger.getLogger(VehicleRoutingProblem.class.getName()).log(Level.SEVERE, null, ex);
+        } finally {
+            if (writer != null) {
+                writer.close();
             }
 
-            for (int j = 1; j < 5; j++) {
-                if (n.cluster == j) {
-                    double difx = Math.abs(n.x - depo.x);
-                    double dify = Math.abs(n.y - depo.y);
-
-                    if (dify != 0) {
-                        double tangA = (double) dify / difx;
-
-                        if (n.cluster == 2 || n.cluster == 4) {
-                            tangA = 1 / tangA;
-                        }
-                        n.angle += Math.atan(tangA);
-                    }
-
-                    break;
-                } else {
-                    n.angle += Math.PI / 2;
-                }
-            }
-            nodesList.add(n);
         }
-        return nodesList;
+
     }
+
 }
